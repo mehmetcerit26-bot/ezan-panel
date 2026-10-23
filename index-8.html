@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Ezan Saati Panel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<!--
+  EZAN SAATI - TELEFON PANELI (v22 ile birlikte calisir)  - CRT OTOMASYON
+  v29: Ust bardaki MOD butonu ile saatin bildirim modu degistirilir:
+       NORMAL / SESSIZ / GIZLI. Komut /ezan_saat/bildirim'e yazilir (MacroDroid ile
+       ayni yol), saat onayi /ezan_saat/gecmis/mod'a yazar. Firebase kurallarinda
+       kendi UID'in icin ezan_saat/bildirim yoluna yazma izni gerekir.
+  ESP32'nin /ezan_saat/gecmis altina yazdigi mesaj, arama kaydi ve canli arama
+  durumunu gosterir. Firebase e-posta/sifre girisi ister.
+
+  KURULUM: asagidaki firebaseConfig'i Firebase konsolundan aldigin bilgilerle doldur
+  (Proje ayarlari > Genel > Uygulamalarin > Web uygulamasi > SDK yapilandirmasi).
+  Deneme: adresin sonuna ?demo=1 eklersen ornek verilerle acilir.
+-->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<style>
+  :root {
+    --bg: #000000;
+    --koyu: #202420;
+    --dim: #6a706a;
+    --cizgi: #2c312c;
+    --beyaz: #f2f2f2;
+    --amber: #f8b400;
+    --yesil: #00e430;
+    --kirmizi: #ff3b30;
+    --teal: #28d0c8;
+    --mavi: #38b0f8;
+    --pembe: #f868b0;
+    --font: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--beyaz); font-family: var(--font); }
+  body { min-height: 100vh; padding-bottom: env(safe-area-inset-bottom); }
+  button { font-family: inherit; }
+  .gizli { display: none !important; }
+
+  /* ── Ust bar ── */
+  header {
+    position: sticky; top: 0; z-index: 5; background: var(--bg);
+    padding: max(12px, env(safe-area-inset-top)) 16px 0;
+    border-bottom: 1px solid var(--cizgi);
+  }
+  .baslik { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .baslik h1 { margin: 0; font-size: 20px; letter-spacing: 1px; color: var(--amber); font-weight: 700; }
+  .durum { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--dim); }
+  .nokta { width: 9px; height: 9px; border-radius: 50%; background: var(--kirmizi); display: inline-block; }
+  .nokta.bagli { background: var(--yesil); }
+  .cikis { background: none; border: 1px solid var(--cizgi); color: var(--dim); border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+  nav { display: flex; margin-top: 10px; }
+  nav button {
+    flex: 1; background: none; border: 0; color: var(--dim); padding: 10px 0 9px;
+    font-size: 14px; font-weight: 600; letter-spacing: .5px; border-bottom: 3px solid transparent;
+    position: relative;
+  }
+  nav button.aktif { color: var(--beyaz); border-bottom-color: var(--teal); }
+  nav .sayi {
+    display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px;
+    background: var(--kirmizi); color: #fff; font-size: 11px; line-height: 18px;
+  }
+
+  main { padding: 12px 16px 24px; max-width: 640px; margin: 0 auto; }
+
+  /* ── Filtre cipleri ── */
+  .filtre { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 10px; scrollbar-width: none; }
+  .filtre::-webkit-scrollbar { display: none; }
+  .cip {
+    flex: none; border: 1px solid var(--cizgi); background: var(--koyu); color: var(--beyaz);
+    border-radius: 16px; padding: 6px 12px; font-size: 13px; display: flex; align-items: center; gap: 6px;
+  }
+  .cip.aktif { background: var(--beyaz); color: #000; border-color: var(--beyaz); }
+  .cip .kare { width: 10px; height: 10px; border-radius: 2px; }
+
+  /* ── Liste ── */
+  .liste { list-style: none; margin: 0; padding: 0; }
+  .satir {
+    display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit;
+    border-bottom: 1px solid var(--cizgi); padding: 12px 2px; cursor: pointer;
+  }
+  .satir:active { background: var(--koyu); }
+  .ust { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .app { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bosluk { flex: 1; }
+  .zaman { color: var(--dim); white-space: nowrap; }
+  .etiketler { display: flex; gap: 3px; }
+  .etiket {
+    width: 18px; height: 18px; border-radius: 3px; color: #000; font-size: 11px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .kim { font-size: 15px; font-weight: 600; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ozet {
+    font-size: 13px; color: #b4b8b4; margin-top: 3px; line-height: 1.4;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+  .arama-satir { display: flex; align-items: center; gap: 12px; }
+  .ok { width: 22px; height: 22px; flex: none; }
+  .arama-orta { flex: 1; min-width: 0; }
+  .arama-orta .kim { margin-top: 0; }
+  .alt { font-size: 12px; margin-top: 3px; display: flex; gap: 8px; }
+  .bos { color: var(--dim); text-align: center; padding: 48px 0; font-size: 14px; }
+
+  /* ── Canli kutular ── */
+  .izgara { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .kutu { border: 2px solid var(--koyu); border-radius: 10px; overflow: hidden; min-height: 168px; display: flex; flex-direction: column; }
+  .kutu .bant { padding: 6px 10px; font-weight: 700; font-size: 16px; background: var(--koyu); color: var(--dim); }
+  .kutu .icerik { padding: 10px; flex: 1; display: flex; flex-direction: column; gap: 6px; }
+  .kutu .hal { font-weight: 700; font-size: 16px; letter-spacing: .5px; }
+  .kutu .kisi { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+  .kutu .no { font-size: 12px; color: var(--amber); }
+  .kutu .sure { margin-top: auto; text-align: right; font-size: 12px; color: var(--dim); }
+  .kutu.bosta .icerik { align-items: center; justify-content: center; color: var(--dim); font-size: 13px; }
+  .kutu.caliyor { animation: nabiz 1s ease-in-out infinite; }
+  @keyframes nabiz { 50% { box-shadow: 0 0 0 3px rgba(255,59,48,.35); } }
+  @media (prefers-reduced-motion: reduce) { .kutu.caliyor { animation: none; } }
+  .not { color: var(--dim); font-size: 12px; margin-top: 14px; line-height: 1.5; }
+
+  /* ── Detay ── */
+  .perde { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 10; display: flex; align-items: flex-end; justify-content: center; }
+  .sayfa {
+    background: #0b0d0b; border-top: 1px solid var(--cizgi); width: 100%; max-width: 640px;
+    max-height: 88vh; overflow-y: auto; border-radius: 14px 14px 0 0; padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  .sayfa .bant { padding: 14px 16px; font-weight: 700; font-size: 17px; color: #000; display: flex; justify-content: space-between; align-items: center; }
+  .sayfa .govde { padding: 14px 16px; }
+  .sayfa .buyuk { font-size: 20px; font-weight: 700; overflow-wrap: anywhere; }
+  .sayfa .mesaj { font-size: 16px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--cizgi); }
+  .bilgi { margin-top: 14px; display: grid; gap: 12px; }
+  .bilgi .etk { font-size: 11px; color: var(--dim); letter-spacing: .5px; }
+  .bilgi .deg { font-size: 16px; font-weight: 600; margin-top: 2px; }
+  .kapat { background: none; border: 0; color: inherit; font-size: 22px; line-height: 1; padding: 0 4px; }
+  .geri { display: block; width: calc(100% - 32px); margin: 8px 16px 0; background: var(--amber); color: #000; border: 0; border-radius: 8px; padding: 12px; font-size: 16px; font-weight: 700; }
+
+  /* ── Giris ── */
+  .giris { max-width: 360px; margin: 12vh auto 0; padding: 0 16px; }
+  .giris h1 { color: var(--amber); font-size: 22px; margin: 0 0 4px; }
+  .giris p { color: var(--dim); font-size: 13px; margin: 0 0 22px; }
+  .giris label { display: block; font-size: 12px; color: var(--dim); margin: 14px 0 6px; }
+  .giris input {
+    width: 100%; background: var(--koyu); border: 1px solid var(--cizgi); color: var(--beyaz);
+    border-radius: 8px; padding: 12px; font-size: 16px; font-family: inherit;
+  }
+  .giris input:focus { outline: 2px solid var(--teal); outline-offset: 0; }
+  .giris button { width: 100%; margin-top: 22px; background: var(--teal); color: #000; border: 0; border-radius: 8px; padding: 13px; font-size: 16px; font-weight: 700; }
+  .hata { color: var(--kirmizi); font-size: 13px; margin-top: 12px; min-height: 18px; }
+
+  /* ── Bildirim modu (v29) ── */
+  .modbtn {
+    background: none; border: 1px solid var(--cizgi); color: var(--dim); border-radius: 6px;
+    padding: 4px 8px; font-size: 12px; font-weight: 700; letter-spacing: .5px; white-space: nowrap;
+  }
+  .modbtn.m0 { color: var(--yesil); border-color: var(--yesil); }
+  .modbtn.m1 { color: var(--amber); border-color: var(--amber); }
+  .modbtn.m2 { color: var(--kirmizi); border-color: var(--kirmizi); }
+  .modbtn.bekliyor { color: var(--dim); border-color: var(--cizgi); }
+  .modsec { display: grid; gap: 10px; }
+  .modsec button {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left;
+    background: var(--koyu); color: var(--beyaz); border: 2px solid var(--cizgi); border-radius: 10px;
+    padding: 12px 14px; font-size: 16px; font-weight: 700; cursor: pointer;
+  }
+  .modsec button span { font-size: 12px; font-weight: 400; color: #b4b8b4; line-height: 1.4; }
+  .modsec button.secili { border-color: currentColor; }
+  .modnot { color: var(--dim); font-size: 12px; margin-top: 12px; line-height: 1.5; min-height: 18px; }
+</style>
+</head>
+<body>
+
+<!-- Giris -->
+<section id="girisEkrani" class="giris gizli">
+  <h1>EZAN SAATİ</h1>
+  <p>Telefon paneli · mesajlar ve aramalar</p>
+  <form id="girisForm" autocomplete="on">
+    <label for="eposta">E-posta</label>
+    <input id="eposta" type="email" autocomplete="username" required>
+    <label for="sifre">Şifre</label>
+    <input id="sifre" type="password" autocomplete="current-password" required>
+    <button type="submit">GİRİŞ</button>
+    <div id="girisHata" class="hata" role="alert"></div>
+  </form>
+</section>
+
+<!-- Panel -->
+<div id="panel" class="gizli">
+  <header>
+    <div class="baslik">
+      <h1>EZAN SAATİ</h1>
+      <div class="durum"><span id="baglanti" class="nokta" title="Firebase bağlantısı"></span><button id="modBtn" class="modbtn bekliyor" title="Bildirim modu">MOD …</button><button id="cikisBtn" class="cikis">Çıkış</button></div>
+    </div>
+    <nav>
+      <button data-sekme="mesaj" class="aktif">MESAJLAR</button>
+      <button data-sekme="arama">ARAMALAR<span id="cevapsizSayi" class="sayi gizli"></span></button>
+      <button data-sekme="canli">CANLI<span id="canliSayi" class="sayi gizli"></span></button>
+    </nav>
+  </header>
+  <main>
+    <section id="sekme-mesaj">
+      <div class="filtre" id="mesajFiltre"></div>
+      <ul class="liste" id="mesajListe"></ul>
+    </section>
+    <section id="sekme-arama" class="gizli">
+      <div class="filtre" id="aramaTur"></div>
+      <div class="filtre" id="aramaFiltre"></div>
+      <ul class="liste" id="aramaListe"></ul>
+    </section>
+    <section id="sekme-canli" class="gizli">
+      <div class="izgara" id="izgara"></div>
+      <p class="not">Kutular ekrandakiyle aynı anda güncellenir. Giden aramada süre, numara çevrildiği andan itibaren sayılır.</p>
+    </section>
+  </main>
+</div>
+
+<div id="perde" class="perde gizli"></div>
+
+<script>
+// ── Firebase ayarlari (konsoldan doldur) ──────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyAFaOEw_58laEwUJ30sluISvlDZvWFBAb0",
+  authDomain: "tft-ekran.firebaseapp.com",
+  databaseURL: "https://tft-ekran-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "tft-ekran",
+  storageBucket: "tft-ekran.firebasestorage.app",
+  messagingSenderId: "97424180371",
+  appId: "1:97424180371:web:5904b1f4c027cec528b966"
+};
+const YOL = "ezan_saat/gecmis";
+
+// ── Telefonlar (ESP32'deki TEL_AD ile ayni sira) ──
+const TEL = [
+  { ad: "Mehmet", harf: "M", renk: "var(--mavi)" },
+  { ad: "Annem",  harf: "A", renk: "var(--pembe)" },
+  { ad: "Sultan", harf: "S", renk: "var(--yesil)" },
+  { ad: "Oğlum",  harf: "O", renk: "var(--amber)" }
+];
+const TUR = [   // arama kaydi turu: 0 gelen, 1 giden, 2 cevapsiz
+  { ad: "Gelen",    baslik: "GELEN ARAMA",    renk: "var(--yesil)" },
+  { ad: "Giden",    baslik: "GIDEN ARAMA",    renk: "var(--mavi)" },
+  { ad: "Cevapsız", baslik: "CEVAPSIZ ARAMA", renk: "var(--kirmizi)" }
+];
+const CANLI = [ // canli kutu durumu: 0 bos, 1 gelen, 2 giden, 3 gorusme, 4 cevapsiz
+  null,
+  { yazi: "ARANIYOR",  renk: "var(--kirmizi)", ok: "←" },
+  { yazi: "ARIYOR",    renk: "var(--yesil)",   ok: "→" },
+  { yazi: "GÖRÜŞÜYOR", renk: "var(--teal)",    ok: "←" },
+  { yazi: "CEVAPSIZ",  renk: "var(--kirmizi)", ok: "←" }
+];
+
+// ── Durum ──
+const veri = { mesaj: [], arama: [], canli: [], mod: null };
+const secim = { sekme: "mesaj", mesajTel: -1, aramaTel: -1, aramaTur: -1 };
+let sonGorulenArama = Number(oku("sonGorulenAramaZ") || 0);   // en son gorulen aramanin saati
+
+function oku(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function yaz(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+// ── Yardimcilar ──
+function el(etiket, sinif, metin) {
+  const e = document.createElement(etiket);
+  if (sinif) e.className = sinif;
+  if (metin != null) e.textContent = metin;
+  return e;
+}
+function iki(n) { return String(n).padStart(2, "0"); }
+function zamanYaz(z, uzun) {
+  if (!z || z < 1700000000) return "--:--";
+  const d = new Date(z * 1000), b = new Date();
+  const saat = iki(d.getHours()) + ":" + iki(d.getMinutes());
+  if (uzun) return iki(d.getDate()) + "." + iki(d.getMonth() + 1) + "." + d.getFullYear() + "  " + saat;
+  if (d.toDateString() === b.toDateString()) return saat;
+  const dun = new Date(b); dun.setDate(b.getDate() - 1);
+  if (d.toDateString() === dun.toDateString()) return "Dün " + saat;
+  return iki(d.getDate()) + "." + iki(d.getMonth() + 1) + " " + saat;
+}
+function sureYaz(s) {
+  s = Math.max(0, Math.floor(s || 0));
+  if (s < 60) return s + " sn";
+  if (s < 3600) return Math.floor(s / 60) + " dk " + iki(s % 60) + " sn";
+  return Math.floor(s / 3600) + " sa " + iki(Math.floor(s / 60) % 60) + " dk";
+}
+function appRenk(app) {
+  const a = (app || "").toLowerCase();
+  if (a.includes("whatsapp")) return "var(--yesil)";
+  if (a.includes("telegram")) return "var(--mavi)";
+  if (a.includes("sms") || a.includes("mesaj") || a.includes("messag")) return "var(--amber)";
+  return "var(--beyaz)";
+}
+function etiketler(maske) {
+  const k = el("span", "etiketler");
+  TEL.forEach((t, j) => {
+    if (!(maske & (1 << j))) return;
+    const e = el("span", "etiket", t.harf);
+    e.style.background = t.renk;
+    e.title = t.ad;
+    k.appendChild(e);
+  });
+  return k;
+}
+function okIkon(tur, renk) {
+  const ns = "http://www.w3.org/2000/svg";
+  const s = document.createElementNS(ns, "svg");
+  s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("class", "ok");
+  s.setAttribute("fill", "none"); s.setAttribute("stroke", renk);
+  s.setAttribute("stroke-width", "2.4"); s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round");
+  const p = document.createElementNS(ns, "path");
+  p.setAttribute("d", tur === 1 ? "M6 18 L18 6 M9 6 H18 V15" : "M18 6 L6 18 M6 9 V18 H15");
+  s.appendChild(p);
+  return s;
+}
+function diziyeCevir(obj) {
+  if (!obj) return [];
+  return Object.values(obj).filter(x => x && typeof x === "object").sort((a, b) => ((b.z || 0) - (a.z || 0)) || ((b.n || 0) - (a.n || 0)));   // en yeni saat en ustte
+}
+
+// ── Filtre cipleri ──
+function cipler(kap, secenekler, aktif, sec) {
+  kap.replaceChildren();
+  secenekler.forEach(s => {
+    const b = el("button", "cip" + (s.deger === aktif ? " aktif" : ""));
+    if (s.renk) { const k = el("span", "kare"); k.style.background = s.renk; b.appendChild(k); }
+    b.appendChild(document.createTextNode(s.ad));
+    b.onclick = () => sec(s.deger);
+    kap.appendChild(b);
+  });
+}
+function telSecenekleri() {
+  return [{ ad: "Tümü", deger: -1 }].concat(TEL.map((t, j) => ({ ad: t.ad, deger: j, renk: t.renk })));
+}
+
+// ── Mesajlar ──
+function mesajCiz() {
+  cipler(document.getElementById("mesajFiltre"), telSecenekleri(), secim.mesajTel, v => { secim.mesajTel = v; mesajCiz(); });
+  const ul = document.getElementById("mesajListe");
+  ul.replaceChildren();
+  const liste = veri.mesaj.filter(m => secim.mesajTel < 0 || (m.tel & (1 << secim.mesajTel)));
+  if (!liste.length) { ul.appendChild(el("li", "bos", "Mesaj yok")); return; }
+  liste.forEach(m => {
+    const li = el("li");
+    const b = el("button", "satir");
+    const ust = el("div", "ust");
+    const app = el("span", "app", m.app || "Bildirim"); app.style.color = appRenk(m.app);
+    ust.append(app, el("span", "bosluk"), etiketler(m.tel || 0), el("span", "zaman", zamanYaz(m.z)));
+    b.append(ust, el("div", "kim", m.kim || "-"), el("div", "ozet", m.msg || ""));
+    b.onclick = () => mesajDetay(m);
+    li.appendChild(b); ul.appendChild(li);
+  });
+}
+function mesajDetay(m) {
+  const s = el("div", "sayfa");
+  const bant = el("div", "bant");
+  bant.style.background = appRenk(m.app);
+  const kapat = el("button", "kapat", "✕"); kapat.setAttribute("aria-label", "Kapat"); kapat.onclick = detayKapat;
+  bant.append(el("span", null, (m.app || "Bildirim").toUpperCase()), kapat);
+  const g = el("div", "govde");
+  g.append(el("div", "buyuk", m.kim || "-"));
+  const bilgi = el("div", "bilgi");
+  bilgi.append(bilgiSatir("TELEFON", TEL.filter((t, j) => (m.tel || 0) & (1 << j)).map(t => t.ad).join(", ") || "-"),
+               bilgiSatir("TARİH / SAAT", zamanYaz(m.z, true)));
+  g.append(bilgi, el("div", "mesaj", m.msg || "(mesaj metni yok)"));
+  const geri = el("button", "geri", "GERİ"); geri.onclick = detayKapat;
+  s.append(bant, g, geri);
+  detayAc(s);
+}
+
+// ── Aramalar ──
+function aramaCiz() {
+  cipler(document.getElementById("aramaTur"),
+    [{ ad: "Tümü", deger: -1 }, { ad: "Cevapsız", deger: 2, renk: "var(--kirmizi)" }, { ad: "Gelen", deger: 0, renk: "var(--yesil)" }, { ad: "Giden", deger: 1, renk: "var(--mavi)" }],
+    secim.aramaTur, v => { secim.aramaTur = v; aramaCiz(); });
+  cipler(document.getElementById("aramaFiltre"), telSecenekleri(), secim.aramaTel, v => { secim.aramaTel = v; aramaCiz(); });
+  const ul = document.getElementById("aramaListe");
+  ul.replaceChildren();
+  const liste = veri.arama.filter(a => (secim.aramaTel < 0 || a.tel === secim.aramaTel) && (secim.aramaTur < 0 || a.tur === secim.aramaTur));
+  if (!liste.length) { ul.appendChild(el("li", "bos", "Arama kaydı yok")); return; }
+  liste.forEach(a => {
+    const tur = TUR[a.tur] || TUR[2];
+    const li = el("li");
+    const b = el("button", "satir");
+    const sat = el("div", "arama-satir");
+    const orta = el("div", "arama-orta");
+    const kim = el("div", "kim", a.kim || a.no || "-");
+    if (a.tur === 2) kim.style.color = "var(--kirmizi)";
+    const alt = el("div", "alt");
+    const turYazi = el("span", null, a.tur === 2 ? tur.ad : tur.ad + " · " + sureYaz(a.sure));
+    turYazi.style.color = tur.renk;
+    alt.append(turYazi, el("span", "bosluk"), el("span", "zaman", zamanYaz(a.z)));
+    orta.append(kim, alt);
+    sat.append(okIkon(a.tur, tur.renk), orta, etiketler(1 << (a.tel || 0)));
+    b.appendChild(sat);
+    b.onclick = () => aramaDetay(a);
+    li.appendChild(b); ul.appendChild(li);
+  });
+}
+function aramaDetay(a) {
+  const tur = TUR[a.tur] || TUR[2];
+  const s = el("div", "sayfa");
+  const bant = el("div", "bant");
+  bant.style.background = tur.renk;
+  if (a.tur === 2) bant.style.color = "#fff";
+  const kapat = el("button", "kapat", "✕"); kapat.setAttribute("aria-label", "Kapat"); kapat.onclick = detayKapat;
+  bant.append(el("span", null, tur.baslik), kapat);
+  const g = el("div", "govde");
+  g.append(el("div", "buyuk", a.kim || a.no || "-"));
+  const bilgi = el("div", "bilgi");
+  if (a.no && a.no !== a.kim) {
+    const no = bilgiSatir("NUMARA", a.no);
+    const link = el("a", null, a.no); link.href = "tel:" + a.no.replace(/\s/g, ""); link.style.color = "var(--amber)";
+    no.lastChild.replaceChildren(link);
+    bilgi.append(no);
+  }
+  const t = TEL[a.tel || 0];
+  const tel = bilgiSatir("TELEFON", t.ad); tel.lastChild.style.color = t.renk;
+  bilgi.append(tel, bilgiSatir("TARİH / SAAT", zamanYaz(a.z, true)));
+  if (a.tur !== 2) {
+    const sr = bilgiSatir(a.tur === 1 ? "SÜRE (çalma dahil)" : "KONUŞMA SÜRESİ", sureYaz(a.sure));
+    sr.lastChild.style.color = tur.renk;
+    bilgi.append(sr);
+  }
+  g.append(bilgi);
+  const geri = el("button", "geri", "GERİ"); geri.onclick = detayKapat;
+  s.append(bant, g, geri);
+  detayAc(s);
+}
+function bilgiSatir(etk, deg) {
+  const d = el("div");
+  d.append(el("div", "etk", etk), el("div", "deg", deg));
+  return d;
+}
+
+// ── Canli ──
+function canliCiz() {
+  const iz = document.getElementById("izgara");
+  iz.replaceChildren();
+  let aktif = 0;
+  TEL.forEach((t, i) => {
+    const c = veri.canli[i] || { d: 0 };
+    const hal = CANLI[c.d];
+    const k = el("div", "kutu" + (hal ? "" : " bosta") + (c.d === 1 ? " caliyor" : ""));
+    const bant = el("div", "bant", t.ad);
+    if (hal) { aktif++; k.style.borderColor = t.renk; bant.style.background = t.renk; bant.style.color = "#000"; }
+    const ic = el("div", "icerik");
+    if (!hal) ic.textContent = "boşta";
+    else {
+      const h = el("div", "hal", hal.yazi); h.style.color = hal.renk;
+      ic.append(h, el("div", "kisi", hal.ok + " " + (c.ad || c.no || "-")));
+      if (c.no && c.no !== c.ad) ic.append(el("div", "no", c.no));
+      const sr = el("div", "sure"); sr.dataset.z = c.z || 0;
+      ic.append(sr);
+    }
+    k.append(bant, ic);
+    iz.appendChild(k);
+  });
+  const sayi = document.getElementById("canliSayi");
+  sayi.textContent = aktif; sayi.classList.toggle("gizli", aktif === 0);
+  sureleriGuncelle();
+}
+function sureleriGuncelle() {
+  const simdi = Date.now() / 1000;
+  document.querySelectorAll(".kutu .sure").forEach(e => {
+    const z = Number(e.dataset.z);
+    e.textContent = z > 1700000000 ? sureYaz(simdi - z) : "";
+  });
+}
+setInterval(sureleriGuncelle, 1000);
+
+// ── Bildirim modu (v29) ──
+const MOD = [
+  { ad: "NORMAL", renk: "var(--yesil)",   acik: "Mesaj ekrana gelir ve bip çalar. Aramada kutular açılır, zil çalar." },
+  { ad: "SESSİZ", renk: "var(--amber)",   acik: "Mesaj ekrana gelir, bip yok. Aramada kutular açılır, zil yok." },
+  { ad: "GİZLİ",  renk: "var(--kirmizi)", acik: "Mesaj ekrana gelmez, sadece listeye düşer. Arama ekranı açılmaz, zil yok." }
+];
+let db = null;
+let bekleyenMod = null, bekleZamanlayici = null;
+
+function modCiz() {
+  const b = document.getElementById("modBtn");
+  b.className = "modbtn";
+  if (bekleyenMod !== null) { b.classList.add("bekliyor"); b.textContent = MOD[bekleyenMod].ad + " …"; return; }
+  if (veri.mod === null) { b.classList.add("bekliyor"); b.textContent = "MOD …"; return; }
+  b.classList.add("m" + veri.mod);
+  b.textContent = MOD[veri.mod].ad;
+}
+function modGeldi(v) {
+  veri.mod = (v && v.m >= 0 && v.m <= 2) ? v.m : null;
+  if (bekleyenMod !== null && veri.mod === bekleyenMod) {
+    bekleyenMod = null;
+    clearTimeout(bekleZamanlayici);
+    const n = document.getElementById("modNot"); if (n) { n.textContent = "Saat onayladı."; setTimeout(detayKapat, 600); }
+  }
+  modCiz();
+}
+function modSayfa() {
+  const s = el("div", "sayfa");
+  const bant = el("div", "bant"); bant.style.background = "var(--teal)";
+  const kapat = el("button", "kapat", "✕"); kapat.setAttribute("aria-label", "Kapat"); kapat.onclick = detayKapat;
+  bant.append(el("span", null, "BİLDİRİM MODU"), kapat);
+  const g = el("div", "govde");
+  const sec = el("div", "modsec");
+  MOD.forEach((m, i) => {
+    const b = el("button", veri.mod === i ? "secili" : "");
+    b.style.color = m.renk;
+    b.append(document.createTextNode(m.ad), el("span", null, m.acik));
+    b.onclick = () => modGonder(i);
+    sec.appendChild(b);
+  });
+  g.append(sec, el("div", "modnot", "Ezan, alarm ve saat başı bu moddan etkilenmez."));
+  g.lastChild.id = "modNot";
+  s.append(bant, g);
+  detayAc(s);
+}
+function modGonder(m) {
+  const n = document.getElementById("modNot");
+  if (!db) { veri.mod = m; modCiz(); detayKapat(); return; }   // demo
+  bekleyenMod = m; modCiz();
+  if (n) n.textContent = "Saate gönderildi, onay bekleniyor…";
+  db.ref("ezan_saat/bildirim").push({ tip: "MOD", msg: String(m) })
+    .catch(err => {
+      bekleyenMod = null; modCiz();
+      if (n) n.textContent = err && err.code === "PERMISSION_DENIED"
+        ? "Yazma izni yok: Firebase kurallarında ezan_saat/bildirim için UID'ine yazma izni ver."
+        : "Gönderilemedi (" + (err && err.code || "hata") + ").";
+    });
+  clearTimeout(bekleZamanlayici);
+  bekleZamanlayici = setTimeout(() => {
+    if (bekleyenMod === null) return;
+    bekleyenMod = null; modCiz();
+    const n2 = document.getElementById("modNot");
+    if (n2) n2.textContent = "Saat 15 sn içinde yanıt vermedi. Komut sırada; saat çevrimiçi olunca uygulanır.";
+  }, 15000);
+}
+document.getElementById("modBtn").onclick = modSayfa;
+
+// ── Cevapsiz sayaci (ARAMALAR sekmesinde rozet) ──
+function rozetGuncelle() {
+  const yeni = veri.arama.filter(a => a.tur === 2 && (a.z || 0) > sonGorulenArama).length;
+  const r = document.getElementById("cevapsizSayi");
+  r.textContent = yeni; r.classList.toggle("gizli", yeni === 0 || secim.sekme === "arama");
+}
+function aramalarGoruldu() {
+  if (!veri.arama.length) return;
+  sonGorulenArama = Math.max(...veri.arama.map(a => a.z || 0));
+  yaz("sonGorulenAramaZ", sonGorulenArama);
+  rozetGuncelle();
+}
+
+// ── Detay paneli ──
+function detayAc(icerik) {
+  const p = document.getElementById("perde");
+  p.replaceChildren(icerik);
+  p.classList.remove("gizli");
+  p.onclick = e => { if (e.target === p) detayKapat(); };
+}
+function detayKapat() { document.getElementById("perde").classList.add("gizli"); }
+document.addEventListener("keydown", e => { if (e.key === "Escape") detayKapat(); });
+
+// ── Sekmeler ──
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => sekmeSec(b.dataset.sekme));
+function sekmeSec(s) {
+  secim.sekme = s;
+  yaz("sekme", s);
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("aktif", b.dataset.sekme === s));
+  ["mesaj", "arama", "canli"].forEach(x => document.getElementById("sekme-" + x).classList.toggle("gizli", x !== s));
+  if (s === "arama") aramalarGoruldu();
+  rozetGuncelle();
+}
+
+function hepsiniCiz() { mesajCiz(); aramaCiz(); canliCiz(); modCiz(); rozetGuncelle(); if (secim.sekme === "arama") aramalarGoruldu(); }
+
+function paneliGoster() {
+  document.getElementById("girisEkrani").classList.add("gizli");
+  document.getElementById("panel").classList.remove("gizli");
+  sekmeSec(oku("sekme") || "mesaj");
+  hepsiniCiz();
+}
+
+// ── Demo (adres sonuna ?demo=1) ──
+function demoVeri() {
+  const s = Math.floor(Date.now() / 1000);
+  veri.mesaj = [
+    { n: 5, app: "WhatsApp", kim: "Veli Daşçı (Alkan)", msg: "Selam abi nasılsın hayırlı akşamlar, Allah nasip ederse salı günü ne kadar gelir mi abi cihazlar? Hava güneşli oluyor çünkü.", tel: 1, z: s - 600 },
+    { n: 4, app: "WhatsApp", kim: "Aile Grubu", msg: "Akşam yemeğe herkes gelsin 🙂", tel: 7, z: s - 3000 },
+    { n: 3, app: "Telegram", kim: "osb", msg: "OSB Depo Raporu - 21:00, Depo A: %56.4 (281.8 ton, 180.4 cm), Depo B (yedek) %91.0", tel: 1, z: s - 9000 },
+    { n: 2, app: "Mesajlar", kim: "Kargo", msg: "Gönderiniz dağıtıma çıkmıştır.", tel: 4, z: s - 90000 }
+  ];
+  veri.arama = [
+    { n: 6, kim: "Annem Akide", no: "0532 000 00 00", tur: 2, tel: 0, sure: 0, z: s - 400 },
+    { n: 5, kim: "Sultanım", no: "0533 000 00 00", tur: 0, tel: 0, sure: 205, z: s - 5000 },
+    { n: 4, kim: "Mehmet", no: "0555 000 00 00", tur: 0, tel: 1, sure: 61, z: s - 7000 },
+    { n: 3, kim: "Babamm Cerit", no: "0544 000 00 00", tur: 1, tel: 0, sure: 42, z: s - 80000 }
+  ];
+  veri.mod = 0;
+  veri.canli = [{ d: 2, ad: "Annem Akide", no: "0532 000 00 00", z: s - 35 }, { d: 1, ad: "Mehmet", no: "0555 000 00 00", z: s - 8 }, { d: 0 }, { d: 0 }];
+  document.getElementById("baglanti").classList.add("bagli");
+  paneliGoster();
+}
+
+// ── Firebase ──
+function baslat() {
+  if (new URLSearchParams(location.search).has("demo")) { demoVeri(); return; }
+  if (firebaseConfig.apiKey.startsWith("BURAYA")) {
+    document.getElementById("girisEkrani").classList.remove("gizli");
+    document.getElementById("girisHata").textContent = "Önce index.html içindeki firebaseConfig doldurulmalı.";
+    return;
+  }
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.database();
+  let dinleyiciler = [];
+
+  db.ref(".info/connected").on("value", s => document.getElementById("baglanti").classList.toggle("bagli", s.val() === true));
+
+  firebase.auth().onAuthStateChanged(k => {
+    dinleyiciler.forEach(r => r.off());
+    dinleyiciler = [];
+    if (!k) {
+      document.getElementById("panel").classList.add("gizli");
+      document.getElementById("girisEkrani").classList.remove("gizli");
+      return;
+    }
+    paneliGoster();
+    const dinle = (alt, fn) => { const r = db.ref(YOL + "/" + alt); r.on("value", s => fn(s.val()), hataGoster); dinleyiciler.push(r); };
+    dinle("mesaj", v => { veri.mesaj = diziyeCevir(v); mesajCiz(); });
+    dinle("arama", v => { veri.arama = diziyeCevir(v); aramaCiz(); rozetGuncelle(); if (secim.sekme === "arama") aramalarGoruldu(); });
+    dinle("canli", v => { veri.canli = Array.isArray(v) ? v : Object.assign([], v || {}); canliCiz(); });
+    dinle("mod", modGeldi);   // v29
+  });
+
+  document.getElementById("girisForm").onsubmit = e => {
+    e.preventDefault();
+    const h = document.getElementById("girisHata");
+    h.textContent = "";
+    firebase.auth().signInWithEmailAndPassword(document.getElementById("eposta").value.trim(), document.getElementById("sifre").value)
+      .catch(err => { h.textContent = girisHataMetni(err.code); });
+  };
+  document.getElementById("cikisBtn").onclick = () => firebase.auth().signOut();
+}
+function hataGoster(err) {
+  console.warn(err);
+  if (err && err.code === "PERMISSION_DENIED") alert("Okuma izni yok. Firebase kurallarındaki UID'yi kontrol et.");
+}
+function girisHataMetni(kod) {
+  if (kod === "auth/invalid-credential" || kod === "auth/wrong-password" || kod === "auth/user-not-found") return "E-posta veya şifre hatalı.";
+  if (kod === "auth/too-many-requests") return "Çok fazla deneme. Biraz bekleyip tekrar dene.";
+  if (kod === "auth/network-request-failed") return "İnternet bağlantısı yok.";
+  if (kod === "auth/unauthorized-domain") return "Bu adres Firebase'de yetkili değil (Authentication > Ayarlar > Yetkili alan adları).";
+  return "Giriş yapılamadı (" + kod + ").";
+}
+baslat();
+</script>
+</body>
+</html>
